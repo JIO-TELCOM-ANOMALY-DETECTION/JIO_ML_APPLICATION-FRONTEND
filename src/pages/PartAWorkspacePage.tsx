@@ -1,0 +1,83 @@
+import { useEffect, useState } from 'react';
+import { Alert, Box, Button, Card, CardContent, FormControl, FormControlLabel, FormLabel, MenuItem, Radio, RadioGroup, Stack, TextField, Typography } from '@mui/material';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useForm, type FieldPath } from 'react-hook-form';
+import { useSearchParams } from 'react-router-dom';
+import { ApiError } from '../api/httpClient';
+import { buildEDARequest, defaultEDAFormValues, runEDA, validateEDAForm, type EDAFormValues } from '../api/edaApi';
+import { reportKeys } from '../api/reportQueries';
+import { runKeys, useAttempt } from '../api/runQueries';
+import { safeWorkflowMessage } from '../api/workflowErrorDisplay';
+import type { StandaloneStageResponse } from '../api/workflowTypes';
+import { StageWorkspace } from '../components/training/StageWorkspace';
+import { PageContainer } from '../components/common/PageContainer';
+
+function safeError(error: Error): string {
+  if (!(error instanceof ApiError)) return safeWorkflowMessage(error.message || 'The request could not be completed.');
+  const prefix = error.status === 404 ? 'Run or attempt not found' : error.status === 409 ? 'Part A lifecycle conflict' : error.status === 422 ? 'Request or CSV validation failed' : error.kind === 'timeout' ? 'The synchronous Part A request timed out' : error.kind === 'network' ? 'Could not reach the ML service' : 'ML workflow request failed';
+  const detail = safeWorkflowMessage(error.message || `HTTP ${error.status ?? 'error'}`);
+  const body = error.body;
+  let validation = '';
+  if (body && typeof body === 'object') {
+    const payload = body as { error?: { details?: { validation_errors?: Array<{ loc?: string[]; msg?: string }> } } };
+    const items = payload.error?.details?.validation_errors;
+    if (Array.isArray(items)) validation = items.map(item => `${(item.loc ?? []).filter(part => part !== 'body').join('.') || 'request'}: ${safeWorkflowMessage(item.msg ?? 'Invalid value')}`).join('; ');
+  }
+  return `${prefix}${error.code ? ` (${error.code})` : ''}: ${detail}${validation ? ` - ${validation}` : ''}`;
+}
+const mappingFields: Array<[keyof EDAFormValues['columns'], string]> = [
+  ['circle_column', 'Circle'], ['cluster_column', 'Cluster'], ['site_name_column', 'Site name'], ['timestamp_column', 'Timestamp'], ['value_column', 'Value'], ['kpi_name_column', 'KPI name'], ['server_type_column', 'Server type (optional source column)'], ['consequent_value_column', 'Consequent value (optional source column)'], ['bucket_type_column', 'Bucket type'], ['bucket_size_column', 'Bucket size'],
+];
+const metadataFields: Array<[keyof EDAFormValues, string, number]> = [['employeeCode', 'Employee code', 128], ['employeeName', 'Employee name', 256], ['runName', 'Run name', 256]];
+const fieldSx = { minWidth: 0, '& .MuiFormHelperText-root': { whiteSpace: 'normal', overflowWrap: 'anywhere', mx: 0 } };
+
+export function PartAWorkspacePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
+  const [workflowResult, setWorkflowResult] = useState<StandaloneStageResponse>();
+  const form = useForm<EDAFormValues>({ defaultValues: defaultEDAFormValues });
+  const mode = form.watch('executionMode'); const bucketSource = form.watch('bucketSource'); const kpiSource = form.watch('kpiSource'); const timelineMode = form.watch('timelineMode'); const columns = form.watch('columns');
+  const currentRun = searchParams.get('run_id') ?? undefined; const currentAttempt = searchParams.get('attempt_id') ?? undefined;
+  const attempt = useAttempt(currentRun ?? '', currentAttempt ?? '');
+  const persistedPartA = attempt.data?.attempt.stages.find(item => item.stage === 'part_a')?.status;
+  useEffect(() => { if (currentRun && currentAttempt) { form.setValue('executionMode', 'retry_attempt'); form.setValue('runId', currentRun); form.setValue('attemptId', currentAttempt); } }, [currentRun, currentAttempt, form]);
+  const mutation = useMutation({ mutationFn: runEDA, onSuccess: async result => { setWorkflowResult(result); form.reset(form.getValues()); setSearchParams({ run_id: result.run_id, attempt_id: result.attempt_id }); await invalidate(result); }, onError: async (_error, request) => { await invalidate({ run_id: request.run_id ?? '', attempt_id: request.attempt_id ?? '' }); } });
+  async function invalidate(result: Pick<StandaloneStageResponse, 'run_id' | 'attempt_id'>) {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: runKeys.all }), queryClient.invalidateQueries({ queryKey: runKeys.detail(result.run_id) }), queryClient.invalidateQueries({ queryKey: runKeys.attempt(result.run_id, result.attempt_id) }),
+      queryClient.invalidateQueries({ queryKey: reportKeys.run(result.run_id) }), queryClient.invalidateQueries({ queryKey: reportKeys.attempt(result.run_id, result.attempt_id) }), queryClient.invalidateQueries({ queryKey: reportKeys.stage(result.run_id, result.attempt_id, 'part_a') }),
+    ]);
+  }
+  useEffect(() => { const guard = (event: BeforeUnloadEvent) => { if (form.formState.isDirty || mutation.isPending) { event.preventDefault(); event.returnValue = ''; } }; window.addEventListener('beforeunload', guard); return () => window.removeEventListener('beforeunload', guard); }, [form.formState.isDirty, mutation.isPending]);
+  const validationErrors = validateEDAForm(form.getValues());
+  const requiredColumns = [columns.circle_column, columns.cluster_column, columns.site_name_column, columns.timestamp_column, columns.value_column, ...(kpiSource === 'csv' ? [columns.kpi_name_column] : []), ...(bucketSource === 'csv' ? [columns.bucket_type_column, columns.bucket_size_column] : [])];
+  const fieldError = (name: string) => form.getFieldState(name as FieldPath<EDAFormValues>).error?.message;
+  const submit = form.handleSubmit(async values => { const errors = validateEDAForm(values); for (const [name, message] of Object.entries(errors)) form.setError((name in values.columns ? `columns.${name}` : name) as FieldPath<EDAFormValues>, { message }); if (Object.keys(errors).length) return; setWorkflowResult(undefined); try { await mutation.mutateAsync(buildEDARequest(values)); } catch { /* mutation error is rendered below */ } });
+  const modeChange = (value: EDAFormValues['executionMode']) => { form.setValue('executionMode', value, { shouldDirty: true }); if (value === 'new_run') { form.setValue('runId', '', { shouldDirty: true }); form.setValue('attemptId', '', { shouldDirty: true }); } else if (value === 'new_attempt') form.setValue('attemptId', '', { shouldDirty: true }); };
+  const timelineChange = (value: EDAFormValues['timelineMode']) => { form.setValue('timelineMode', value, { shouldDirty: true }); form.setValue('expectedStart', '', { shouldDirty: true }); form.setValue('expectedEnd', '', { shouldDirty: true }); form.setValue('numDays', '', { shouldDirty: true }); form.clearErrors(['expectedStart', 'expectedEnd', 'numDays']); };
+  const apiError = mutation.error instanceof Error ? safeError(mutation.error) : '';
+
+  return <PageContainer><StageWorkspace title="Part A - Exploratory Data Analysis" description="Validate and summarize a CSV using the ML backend, then persist a Part A execution." runId={currentRun} attemptId={currentAttempt} attemptStages={attempt.data?.attempt.stages} pending={mutation.isPending} result={workflowResult} error={apiError}>
+    <form onSubmit={submit} noValidate><Stack spacing={2}>
+      <Card variant="outlined"><CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, '& > .MuiFormControl-root, & > .MuiTextField-root': { width: '100%', minWidth: 0 }, '& .MuiFormHelperText-root': { whiteSpace: 'normal', overflowWrap: 'anywhere', mx: 0 } }}><Typography component="h2" variant="h6">Basic configuration</Typography>
+        <FormControl><FormLabel>Execution mode</FormLabel><RadioGroup value={mode} onChange={event => modeChange(event.target.value as EDAFormValues['executionMode'])}><FormControlLabel value="new_run" control={<Radio/>} label="New run - create a run and attempt"/><FormControlLabel value="new_attempt" control={<Radio/>} label="New attempt - create an attempt under an existing run"/><FormControlLabel value="retry_attempt" control={<Radio/>} label="Target attempt - backend lifecycle rules decide whether Part A can run"/></RadioGroup></FormControl>
+        {mode !== 'new_run' && <TextField fullWidth sx={fieldSx} label="Run ID" required value={form.watch('runId')} onChange={event => form.setValue('runId', event.target.value, { shouldDirty: true })} error={!!fieldError('runId')} helperText={fieldError('runId')} inputProps={{ maxLength: 96 }}/>} 
+        {mode === 'retry_attempt' && <TextField fullWidth sx={fieldSx} label="Attempt ID" required value={form.watch('attemptId')} onChange={event => form.setValue('attemptId', event.target.value, { shouldDirty: true })} error={!!fieldError('attemptId')} helperText={fieldError('attemptId')} inputProps={{ maxLength: 128 }}/>} 
+        <Box><Typography component="h3" variant="subtitle1">Run metadata</Typography><Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>Metadata is applied when creating a new run. For existing runs or attempt retries the backend keeps that run's existing metadata.</Typography><Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))', lg: 'repeat(3, minmax(0, 1fr))' }, gap: 2, mt: 1.5 }}>{metadataFields.map(([name, label, max]) => <TextField key={name} fullWidth sx={fieldSx} label={label} inputProps={{ maxLength: max }} {...form.register(name as keyof EDAFormValues)} error={!!fieldError(name as FieldPath<EDAFormValues>)} helperText={fieldError(name as FieldPath<EDAFormValues>)}/>)}</Box></Box>
+        <TextField fullWidth sx={fieldSx} label="Server-readable CSV path" required value={form.watch('inputFile')} onChange={event => form.setValue('inputFile', event.target.value, { shouldDirty: true })} error={!!fieldError('inputFile')} helperText={<Stack component="span" spacing={0.25}><span>{fieldError('inputFile') ?? 'Path is read by the ML backend process; no browser upload occurs.'}</span><span>Example: C:\data\telecom.csv. The backend validates existence, CSV format, encoding and content.</span></Stack>}/>
+        <FormControl fullWidth><FormLabel>KPI identity</FormLabel><RadioGroup value={kpiSource} onChange={event => form.setValue('kpiSource', event.target.value as EDAFormValues['kpiSource'], { shouldDirty: true })}><FormControlLabel value="csv" control={<Radio/>} label={`Read KPI names from CSV column ${columns.kpi_name_column}`}/><FormControlLabel value="single" control={<Radio/>} label="The entire file contains one KPI"/></RadioGroup>{kpiSource === 'single' && <TextField fullWidth sx={{ ...fieldSx, mt: 1 }} label="Single KPI name" required value={form.watch('singleKpiName')} onChange={event => form.setValue('singleKpiName', event.target.value, { shouldDirty: true })} error={!!fieldError('singleKpiName')} helperText={fieldError('singleKpiName')}/>}</FormControl>
+        <FormControl fullWidth><FormLabel>Bucket information</FormLabel><RadioGroup value={bucketSource} onChange={event => form.setValue('bucketSource', event.target.value as EDAFormValues['bucketSource'], { shouldDirty: true })}><FormControlLabel value="csv" control={<Radio/>} label="Read from the CSV bucket columns"/><FormControlLabel value="request" control={<Radio/>} label="Provide bucket information here"/></RadioGroup>{bucketSource === 'csv' ? <Typography variant="body2" sx={{ mt: 0.5, overflowWrap: 'anywhere' }}>CSV must contain {columns.bucket_type_column} and {columns.bucket_size_column}.</Typography> : <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 2, mt: 1 }}><TextField fullWidth sx={fieldSx} label="Bucket type" required value={form.watch('bucketType')} onChange={event => form.setValue('bucketType', event.target.value, { shouldDirty: true })} error={!!fieldError('bucketType')} helperText={fieldError('bucketType')}/><TextField fullWidth sx={fieldSx} label="Bucket size" type="number" required inputProps={{ min: 1, step: 1 }} value={form.watch('bucketSize')} onChange={event => form.setValue('bucketSize', event.target.value, { shouldDirty: true })} error={!!fieldError('bucketSize')} helperText={fieldError('bucketSize')}/></Box>}</FormControl>
+        <Stack spacing={1.5}><TextField fullWidth sx={fieldSx} select label="Expected timeline" value={timelineMode} onChange={event => timelineChange(event.target.value as EDAFormValues['timelineMode'])}><MenuItem value="global_min_max">global_min_max - use data minimum and maximum (default)</MenuItem><MenuItem value="date_range">date_range - use explicit timestamps</MenuItem><MenuItem value="num_days">num_days - count complete days from earliest data</MenuItem></TextField>
+          {timelineMode === 'date_range' && <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}><TextField fullWidth sx={fieldSx} label="Expected start" type="datetime-local" required InputLabelProps={{ shrink: true }} value={form.watch('expectedStart')} onChange={event => form.setValue('expectedStart', event.target.value, { shouldDirty: true })} error={!!fieldError('expectedStart')} helperText={fieldError('expectedStart') ?? 'Sent without timezone conversion as a local ISO datetime.'}/><TextField fullWidth sx={fieldSx} label="Expected end" type="datetime-local" required InputLabelProps={{ shrink: true }} value={form.watch('expectedEnd')} onChange={event => form.setValue('expectedEnd', event.target.value, { shouldDirty: true })} error={!!fieldError('expectedEnd')} helperText={fieldError('expectedEnd')}/></Box>}
+          {timelineMode === 'num_days' && <TextField fullWidth sx={fieldSx} label="Number of days" type="number" required inputProps={{ min: 1, step: 1 }} value={form.watch('numDays')} onChange={event => form.setValue('numDays', event.target.value, { shouldDirty: true })} error={!!fieldError('numDays')} helperText={fieldError('numDays')}/>}
+        </Stack>
+      </CardContent></Card>
+      <Card variant="outlined"><CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, '& .MuiFormHelperText-root': { whiteSpace: 'normal', overflowWrap: 'anywhere', mx: 0 } }}><Box><Typography component="h2" variant="h6">Advanced configuration</Typography><Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>Map logical dataset fields to physical CSV header names. All mappings are required and unique; server type and consequent value columns are optional in the source file.</Typography></Box><Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'repeat(2, minmax(0, 1fr))' }, gap: 2 }}>{mappingFields.map(([name, label]) => <TextField key={name} label={`${label} column`} fullWidth sx={fieldSx} value={columns[name]} onChange={event => form.setValue(`columns.${name}`, event.target.value, { shouldDirty: true })} error={!!fieldError(`columns.${name}`)} helperText={fieldError(`columns.${name}`)}/>)}</Box>
+        <Box><Typography component="h3" variant="subtitle1">CSV columns required for this request</Typography><Typography variant="body2" sx={{ mt: 0.5, overflowWrap: 'anywhere' }}>{requiredColumns.join(', ')}</Typography></Box>
+      </CardContent></Card>
+      {Object.keys(validationErrors).length > 0 && form.formState.submitCount > 0 && <Alert severity="error">Review the highlighted fields. Duplicate physical column names are not allowed.</Alert>}
+      <Alert severity="info">Part A is a synchronous backend workflow and may take a long time. Do not close or refresh this page while it runs. The browser does not upload the CSV.</Alert>
+      <Box><Button type="submit" variant="contained" disabled={mutation.isPending || persistedPartA === 'completed' || persistedPartA === 'running' || workflowResult?.status === 'completed'}>{mutation.isPending ? 'Running Part A...' : 'Run Part A'}</Button> {(workflowResult?.status === 'completed' || persistedPartA === 'completed') && <Button type="button" onClick={() => { setWorkflowResult(undefined); form.reset(defaultEDAFormValues); setSearchParams({}); }}>Start a new form</Button>}</Box>
+    </Stack></form>
+  </StageWorkspace></PageContainer>;
+}
