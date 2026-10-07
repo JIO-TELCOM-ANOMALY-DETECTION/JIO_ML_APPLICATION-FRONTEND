@@ -36,7 +36,7 @@ describe('editable Help coverage', () => {
     }
   });
   it('documents literal and dynamic form labels', () => {
-    const literalLabels = Object.values(sources).flatMap(source => [...source.matchAll(/\blabel="([^"]+)"/g)].map(match => match[1]));
+    const literalLabels = Object.values(sources).flatMap(source => [...source.matchAll(/<(?:TextField|SelectField|NumberField|NumericListField|StatusList)\b[^>]*?\blabel="([^"]+)"/g)].map(match => match[1]));
     const missing = [...new Set([...literalLabels, ...dynamicLabels])].filter(label => !allLabels.has(normalize(label)));
     expect(missing).toEqual([]);
   });

@@ -95,4 +95,8 @@ export type InferenceInvocationSummary = {
   metrics?: Record<string, StructuredValue>;
 };
 export type InferenceInvocationList = { run_id: string; invocations: InferenceInvocationSummary[] };
+export type InferenceResultFilters = Partial<Record<'composite_id' | 'circle' | 'cluster' | 'site_name' | 'kpi' | 'status' | 'start_time' | 'end_time', string>>;
+export type InferenceResultParams = InferenceResultFilters & { mode: 'anomalies' | 'all'; page: number; page_size: 25 | 50 | 100; sort_by: string; sort_order: 'asc' | 'desc' };
+export type InferenceResultsPage = { items: Record<string, string>[]; pagination: { page: number; page_size: number; total_items: number; total_pages: number; has_previous: boolean; has_next: boolean }; filters_applied: InferenceResultFilters; source: Record<string, StructuredValue> };
+export type InferenceFilterOptions = Record<'composite_id' | 'circle' | 'cluster' | 'site_name' | 'kpi' | 'status', string[]>;
 

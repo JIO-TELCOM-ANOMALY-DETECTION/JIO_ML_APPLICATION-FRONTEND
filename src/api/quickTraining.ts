@@ -33,6 +33,18 @@ export type TrainingPipelineResponse = {
   next_stage: StageExecutionSummary['stage'] | 'inference' | null; inference_ready: boolean;
   summary: Record<string, unknown>; error: WorkflowErrorDetail | null;
 };
+export type QuickTrainingAcknowledgementRequest = Omit<TrainingPipelineRequest, 'run_id'> & { run_id?: never };
+export type QuickTrainingAcknowledgementResponse = {
+  run_id: string; status: 'created'; attempt_id: null; message: string;
+};
+export async function acknowledgeQuickTraining(request: QuickTrainingAcknowledgementRequest): Promise<QuickTrainingAcknowledgementResponse> {
+  if ('run_id' in request) throw new Error('Acknowledgement only supports new runs.');
+  const value: unknown = await mlClient.post('/api/v1/pipeline/master-pipeline-request-acknowledgement-return', request);
+  if (!value || typeof value !== 'object') throw new Error('Unexpected acknowledgement response.');
+  const result = value as QuickTrainingAcknowledgementResponse;
+  if (typeof result.run_id !== 'string' || !result.run_id.trim() || result.status !== 'created' || result.attempt_id !== null || typeof result.message !== 'string') throw new Error('Unexpected acknowledgement response.');
+  return result;
+}
 function nonFinitePaths(value: unknown, path = ''): string[] {
   if (typeof value === 'number') return Number.isFinite(value) ? [] : [path];
   if (!value || typeof value !== 'object') return [];

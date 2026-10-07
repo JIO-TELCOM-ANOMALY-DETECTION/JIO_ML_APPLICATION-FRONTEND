@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { getAttemptReport, getInferenceReport, getRunReport, getStageReport, isReportStage, isValidReportId, listInferenceReports } from './reportingApi';
+import { getAttemptReport, getInferenceReport, getInferenceResults, getInferenceFilterOptions, getRunReport, getStageReport, isReportStage, isValidReportId, listInferenceReports } from './reportingApi';
+import type { InferenceResultParams } from './reportTypes';
 export const reportKeys = {
   all: ['reports'] as const,
   run: (runId: string) => ['reports', 'runs', runId] as const,
@@ -13,3 +14,5 @@ export const useAttemptReport = (runId: string, attemptId: string) => useQuery({
 export const useStageReport = (runId: string, attemptId: string, stage: string) => useQuery({ queryKey: reportKeys.stage(runId, attemptId, stage), queryFn: () => getStageReport(runId, attemptId, stage), enabled: isValidReportId(runId) && isValidReportId(attemptId) && isReportStage(stage), refetchInterval: false });
 export const useInferenceReports = (runId: string) => useQuery({ queryKey: reportKeys.inferences(runId), queryFn: () => listInferenceReports(runId), enabled: isValidReportId(runId), refetchInterval: false });
 export const useInferenceReport = (runId: string, invocationId: string) => useQuery({ queryKey: reportKeys.inference(runId, invocationId), queryFn: () => getInferenceReport(runId, invocationId), enabled: isValidReportId(runId) && isValidReportId(invocationId), refetchInterval: false });
+export const useInferenceResults = (runId: string, invocationId: string, params: InferenceResultParams) => useQuery({ queryKey: [...reportKeys.inference(runId, invocationId), 'results', params], queryFn: () => getInferenceResults(runId, invocationId, params), enabled: isValidReportId(runId) && isValidReportId(invocationId), refetchInterval: false, retry: false });
+export const useInferenceFilterOptions = (runId: string, invocationId: string) => useQuery({ queryKey: [...reportKeys.inference(runId, invocationId), 'filter-options'], queryFn: () => getInferenceFilterOptions(runId, invocationId), enabled: isValidReportId(runId) && isValidReportId(invocationId), refetchInterval: false, retry: false });

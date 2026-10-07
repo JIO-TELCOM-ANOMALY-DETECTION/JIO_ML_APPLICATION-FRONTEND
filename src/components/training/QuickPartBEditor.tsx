@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Alert, Box, Button, Card, CardContent, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import { backendPreprocessingDefaults, validatePartB, type PreprocessingConfig } from '../../api/stageBC';
 import { Phase4Editor } from './Phase4Editor';
+import { InfoTooltip } from '../common/ReportWidgets';
 
 type Props = { value: PreprocessingConfig; onChange: (value: PreprocessingConfig) => void; customGap: boolean; onCustomGapChange: (value: boolean) => void; drafts: Record<string, string>; onDraftsChange: (value: Record<string, string>) => void };
 const names = (key: string) => key.replaceAll('_', ' ');
@@ -32,6 +33,7 @@ export function QuickPartBEditor({ value, onChange, customGap, onCustomGapChange
         onChange({ ...value, outlier: { method: e.target.value as PreprocessingConfig['outlier']['method'], direction: value.outlier.direction, ...(e.target.value === 'user_bounds' ? {} : { iqr_multiplier: 1.5 }), ...(e.target.value === 'one_day_centered_iqr' ? { centered_window_minutes: 1440, centered_min_valid_minutes: 720 } : {}) } });
       }}><MenuItem value="global_iqr">Global IQR</MenuItem><MenuItem value="one_day_centered_iqr">One day centered IQR</MenuItem><MenuItem value="user_bounds">User bounds</MenuItem></TextField>
       <TextField select label={`${prefix}Outlier direction`} value={value.outlier.direction} onChange={e => update('outlier', 'direction', e.target.value)}><MenuItem value="lower_only">Lower only</MenuItem><MenuItem value="upper_only">Upper only</MenuItem><MenuItem value="both">Both</MenuItem></TextField>
+      <InfoTooltip label="Outlier direction" description="Determines which side of the final IQR bounds is checked. Both flags values below the lower bound and above the upper bound. Default: both." href="/help/training/part-b#outliers"/>
       {value.outlier.method === 'user_bounds' ? <>{value.outlier.direction !== 'upper_only' && numeric('outlier', 'user_lower_bound', false, `${prefix}user lower bound`)}{value.outlier.direction !== 'lower_only' && numeric('outlier', 'user_upper_bound', false, `${prefix}user upper bound`)}</> : numeric('outlier', 'iqr_multiplier', false, `${prefix}iqr multiplier`)}
       {value.outlier.method === 'one_day_centered_iqr' && <>{numeric('outlier', 'centered_window_minutes', false, `${prefix}centered window minutes`)}{numeric('outlier', 'centered_min_valid_minutes', false, `${prefix}centered min valid minutes`)}</>}
     </>;

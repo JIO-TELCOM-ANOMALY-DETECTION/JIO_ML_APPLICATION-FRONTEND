@@ -3,7 +3,8 @@ import { Alert, Box, Button, Breadcrumbs, Card, CardActionArea, CardContent, For
 import Refresh from '@mui/icons-material/Refresh';
 import ChevronLeft from '@mui/icons-material/ChevronLeft';
 import ChevronRight from '@mui/icons-material/ChevronRight';
-import { Link as RouterLink, useParams } from 'react-router-dom';
+import { Link as RouterLink, useParams, useSearchParams } from 'react-router-dom';
+import { QuickTrainingTracker } from '../components/training/QuickTrainingTracker';
 import { useAttempt, useRun, useRuns } from '../api/runQueries';
 import { completedStage, guidedPath } from '../api/guidedNavigation';
 import type { AttemptView, ExecutionView, RunSummaryResponse, StageView } from '../api/runTypes';
@@ -23,14 +24,15 @@ function NotFound({ kind }: { kind: string }) { return <EmptyState title={`${kin
 const emptyRuns: RunSummaryResponse[] = [];
 
 export function RunsPage() {
-  const query = useRuns(); const [search, setSearch] = useState(''); const [status, setStatus] = useState('all'); const [readiness, setReadiness] = useState<'all'|'ready'|'not-ready'>('all'); const [page,setPage]=useState(1); const [pageSize,setPageSize]=useState(10);
+  const [loadRuns, setLoadRuns] = useState(false); const query = useRuns(loadRuns); const [search, setSearch] = useState(''); const [status, setStatus] = useState('all'); const [readiness, setReadiness] = useState<'all'|'ready'|'not-ready'>('all'); const [page,setPage]=useState(1); const [pageSize,setPageSize]=useState(10);
   const runs = query.data ?? emptyRuns; const filtered = useMemo(() => filterRuns(runs, search, status, readiness), [runs, search, status, readiness]);
   const totalPages=Math.max(1,Math.ceil(filtered.length/pageSize)); const currentPage=Math.min(page,totalPages); const visible=filtered.slice((currentPage-1)*pageSize,currentPage*pageSize);
   const statuses = [...new Set(runs.map(run => run.status))].sort();
   return <PageContainer><PageHeader title="Runs & Models" description="Review persisted model runs, attempts and inference readiness."/>
-    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 2 }}><Box sx={{ flex: 1 }}/><Button startIcon={<Refresh/>} onClick={() => void query.refetch()} disabled={query.isFetching}>Refresh</Button></Stack>
+    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mb: 2 }}><Box sx={{ flex: 1 }}/>{loadRuns || query.data ? <Button startIcon={<Refresh/>} onClick={() => { if (loadRuns) void query.refetch(); else setLoadRuns(true); }} disabled={query.isFetching}>Refresh</Button> : <Button variant="contained" onClick={() => setLoadRuns(true)}>Load runs</Button>}</Stack>
+    {!loadRuns && !query.data && <EmptyState title="Run list not loaded" description="Load runs when you need to browse the full run history, or open a known run directly by its link."/>}
     {query.isError && !query.data && <QueryError error={query.error} retry={() => void query.refetch()}/>}
-    {query.isPending && <LoadingState label="Loading runs"/>}
+    {loadRuns && query.isPending && <LoadingState label="Loading runs"/>}
     {query.isFetching && query.data && <Typography role="status" variant="caption" color="text.secondary">Refreshing runs…</Typography>}
     {query.data && <><Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} sx={{ mb: 2 }}><TextField label="Search employee, run name or run ID" value={search} onChange={event => {setSearch(event.target.value);setPage(1)}} fullWidth size="small"/><FormControl size="small" sx={{ minWidth: 170 }}><InputLabel id="status-filter-label">Status</InputLabel><Select labelId="status-filter-label" label="Status" value={status} onChange={event => {setStatus(event.target.value);setPage(1)}}><MenuItem value="all">All statuses</MenuItem>{statuses.map(value => <MenuItem value={value} key={value}>{value.replaceAll('_', ' ')}</MenuItem>)}</Select></FormControl><FormControl size="small" sx={{ minWidth: 170 }}><InputLabel id="ready-filter-label">Inference readiness</InputLabel><Select labelId="ready-filter-label" label="Inference readiness" value={readiness} onChange={event => {setReadiness(event.target.value as typeof readiness);setPage(1)}}><MenuItem value="all">All</MenuItem><MenuItem value="ready">Ready</MenuItem><MenuItem value="not-ready">Not ready</MenuItem></Select></FormControl></Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>{filtered.length} of {runs.length} runs{query.dataUpdatedAt ? ` · Updated ${formatDate(new Date(query.dataUpdatedAt).toISOString())}` : ''}</Typography>
@@ -46,11 +48,12 @@ function RunCard({ run }: { run: RunSummaryResponse }) {
 function ChipReady({ ready }: { ready: boolean }) { return <Typography variant="caption" color={ready ? 'success.main' : 'text.secondary'}>Inference {ready ? 'ready' : 'not ready'}</Typography>; }
 
 export function RunDetailPage() {
-  const { runId = '' } = useParams(); const query = useRun(runId);
+  const { runId = '' } = useParams(); const [params] = useSearchParams(); const tracking = params.get('quick_training') === '1'; const query = useRun(runId, tracking);
   if (query.isPending) return <PageContainer><LoadingState label="Loading run"/></PageContainer>;
   if (query.isError && !query.data) { const notFound = query.error instanceof Error && 'status' in query.error && (query.error as {status?:number}).status === 404; return <PageContainer>{notFound ? <NotFound kind="Run"/> : <QueryError error={query.error} retry={() => void query.refetch()}/>}</PageContainer>; }
   const run = query.data; if (!run) return <PageContainer><NotFound kind="Run"/></PageContainer>;
   return <PageContainer><Breadcrumbs sx={{ mb: 2 }}><Link component={RouterLink} to="/runs">Runs & Models</Link><Typography color="text.primary">{run.run_metadata.run_name || run.run_id}</Typography></Breadcrumbs><PageHeader title={run.run_metadata.run_name || 'Run details'} description={`Run ID: ${run.run_id}`}/>{query.isFetching && <Typography role="status" variant="caption">Refreshing…</Typography>}{query.isError && <Alert severity="warning">Refresh failed; showing saved run data.</Alert>}
+    {tracking && <Box sx={{ mb: 2 }}><QuickTrainingTracker runId={runId}/></Box>}
     <SectionCard title="Run overview"><Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} flexWrap="wrap"><LifecycleStatus status={run.status}/><Typography>Inference {run.inference_ready ? 'ready' : 'not ready'}</Typography><Typography>Employee: {display(run.run_metadata.employee_name)} ({display(run.run_metadata.employee_code)})</Typography><Typography>Created: {formatDate(run.created_at_utc)}</Typography><Typography>Updated: {formatDate(run.updated_at_utc)}</Typography></Stack><Metadata title="Run metadata" value={run.run_metadata}/><Metadata title="Summary" value={run.summary}/><Errors errors={run.errors}/></SectionCard>
     {run.inference_ready && <Button component={RouterLink} to={`/inference?run_id=${encodeURIComponent(run.run_id)}`} variant="contained" sx={{ mb: 2 }}>Run inference</Button>}<RunReportingPanels runId={run.run_id}/>
     <Box sx={{ mt: 2 }}><SectionCard title={`Attempts (${run.attempt_count})`}>{run.attempts.length ? <AttemptCards run={run}/> : <EmptyState title="No attempts" description="This run does not have any attempts yet."/>}</SectionCard></Box>

@@ -1,5 +1,5 @@
 import { reportingClient } from './reportingClient';
-import { REPORT_STAGES, type AttemptReportSummary, type InferenceInvocationList, type ReportEnvelope, type ReportStage, type RunReportSummary } from './reportTypes';
+import { REPORT_STAGES, type AttemptReportSummary, type InferenceInvocationList, type InferenceResultParams, type InferenceResultsPage, type InferenceFilterOptions, type ReportEnvelope, type ReportStage, type RunReportSummary } from './reportTypes';
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 export const isValidReportId = (value: string): boolean => /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
@@ -38,3 +38,14 @@ export async function getStageReport(runId: string, attemptId: string, stage: st
 }
 export async function listInferenceReports(runId: string): Promise<InferenceInvocationList> { return parseInferenceList(await reportingClient.get<unknown>(`${runPath(runId)}/inference`)); }
 export async function getInferenceReport(runId: string, invocationId: string): Promise<ReportEnvelope> { return parseReportEnvelope(await reportingClient.get<unknown>(`${runPath(runId)}/inference/${encodeURIComponent(invocationId)}`)); }
+export async function getInferenceResults(runId: string, invocationId: string, params: InferenceResultParams): Promise<InferenceResultsPage> {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => { if (value !== '' && value !== undefined) query.set(key, String(value)); });
+  const value = requireRecord(await reportingClient.get<unknown>(`${runPath(runId)}/inference/${encodeURIComponent(invocationId)}/results?${query}`), 'inference results');
+  if (!Array.isArray(value.items) || !isRecord(value.pagination) || typeof value.pagination.total_items !== 'number' || !isRecord(value.filters_applied) || !isRecord(value.source)) throw new Error('The reporting service returned an unexpected inference results response.');
+  return value as InferenceResultsPage;
+}
+export async function getInferenceFilterOptions(runId: string, invocationId: string): Promise<InferenceFilterOptions> {
+  const value = requireRecord(await reportingClient.get<unknown>(`${runPath(runId)}/inference/${encodeURIComponent(invocationId)}/filter-options`), 'inference filters');
+  return value as InferenceFilterOptions;
+}

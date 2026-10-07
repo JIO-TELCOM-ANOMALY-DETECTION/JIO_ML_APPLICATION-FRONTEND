@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import { Alert, Box, Button, Card, CardContent, MenuItem, Stack, TextField, Typography } from '@mui/material';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link as RouterLink, useSearchParams } from 'react-router-dom';
@@ -6,10 +6,11 @@ import { ApiError } from '../api/httpClient';
 import { backendPreprocessingDefaults, buildPartBRequest, runPartB, validatePartB, type PreprocessingConfig } from '../api/stageBC';
 import { runKeys, useAttempt } from '../api/runQueries';
 import { reportKeys } from '../api/reportQueries';
-import { safeWorkflowMessage } from '../api/workflowErrorDisplay';
+import { safeWorkflowMessage, safeWorkflowValue } from '../api/workflowErrorDisplay';
 import { StageWorkspace } from '../components/training/StageWorkspace';
 import { Phase4Editor } from '../components/training/Phase4Editor';
 import { PageContainer } from '../components/common/PageContainer';
+import { InfoTooltip, KeyValueTable, RawJsonDisclosure } from '../components/common/ReportWidgets';
 import type { StandaloneStageResponse } from '../api/workflowTypes';
 
 export function PartsBCWorkspacePage() {
@@ -29,7 +30,7 @@ export function PartsBCWorkspacePage() {
  {!runId||!attemptId?<Alert severity="warning">Both run_id and attempt_id are required in the URL. Open Part A or choose a run to continue.</Alert>:context.isLoading?<Alert severity="info">Loading attempt lifecycle state…</Alert>:context.isError?<Alert severity="error">Could not load this attempt. Refresh or return to runs.</Alert>:!eligible?<Alert severity="warning">{stageName} requires a successfully completed Part A on this attempt. Current prerequisite state: {previous?.status??'not found'}.</Alert>:already?.status==='completed'?<Alert severity="success">This stage is complete and immutable. Open its report from the attempt detail page.</Alert>:<form onSubmit={e=>{e.preventDefault();if(canSubmit)mutation.mutate()}}><Stack spacing={2}>
  <>
  <Card variant="outlined"><CardContent><Typography variant="h6">Basic configuration</Typography><Box sx={{display:'grid',gridTemplateColumns:{xs:'minmax(0,1fr)',sm:'repeat(2,minmax(0,1fr))'},gap:2,mt:2}}>
- <TextField select label="Outlier method" value={config.outlier.method} onChange={e=>setConfig(c=>({...c,outlier:{method:e.target.value as PreprocessingConfig['outlier']['method'],direction:c.outlier.direction,iqr_multiplier:1.5}}))}><MenuItem value="global_iqr">global_iqr</MenuItem><MenuItem value="one_day_centered_iqr">one_day_centered_iqr</MenuItem><MenuItem value="user_bounds">user_bounds</MenuItem></TextField>
+ <TextField select label="Outlier method" value={config.outlier.method} onChange={e=>setConfig(c=>({...c,outlier:{method:e.target.value as PreprocessingConfig['outlier']['method'],direction:c.outlier.direction,iqr_multiplier:1.5}}))}><MenuItem value="global_iqr">global_iqr</MenuItem><MenuItem value="one_day_centered_iqr">one_day_centered_iqr</MenuItem><MenuItem value="user_bounds">user_bounds</MenuItem></TextField><InfoTooltip label="Outlier method" description="Selects global IQR, centered IQR, or explicit user bounds. The choice changes how outlier limits are calculated." href="/help/training/part-b#outliers"/>
  <TextField select label="Outlier direction" value={config.outlier.direction} onChange={e=>setConfig(c=>({...c,outlier:{...c.outlier,direction:e.target.value as PreprocessingConfig['outlier']['direction']}}))}><MenuItem value="lower_only">lower_only</MenuItem><MenuItem value="upper_only">upper_only</MenuItem><MenuItem value="both">both</MenuItem></TextField>
  {config.outlier.method!=='user_bounds'?<TextField label="IQR multiplier" type="number" value={config.outlier.iqr_multiplier??1.5} onChange={e=>setConfig(c=>({...c,outlier:{...c.outlier,iqr_multiplier:Number(e.target.value)}}))}/>:<>{config.outlier.direction!=='upper_only'&&<TextField label="User lower bound" type="number" value={config.outlier.user_lower_bound??''} onChange={e=>setConfig(c=>({...c,outlier:{...c.outlier,user_lower_bound:Number(e.target.value)}}))} error={!!errs['outlier.user_lower_bound']} helperText={errs['outlier.user_lower_bound']}/>}{config.outlier.direction!=='lower_only'&&<TextField label="User upper bound" type="number" value={config.outlier.user_upper_bound??''} onChange={e=>setConfig(c=>({...c,outlier:{...c.outlier,user_upper_bound:Number(e.target.value)}}))}/>}</>}
  {config.outlier.method==='one_day_centered_iqr'&&<><TextField label="Centered window minutes" type="number" value={config.outlier.centered_window_minutes??1440} onChange={e=>setConfig(c=>({...c,outlier:{...c.outlier,centered_window_minutes:Number(e.target.value)}}))}/><TextField label="Minimum valid duration minutes" type="number" value={config.outlier.centered_min_valid_minutes??720} onChange={e=>setConfig(c=>({...c,outlier:{...c.outlier,centered_min_valid_minutes:Number(e.target.value)}}))} error={!!errs['outlier.centered_min_valid_minutes']} helperText={errs['outlier.centered_min_valid_minutes']}/></>}
@@ -38,12 +39,6 @@ export function PartsBCWorkspacePage() {
  </>
  <Card variant="outlined"><CardContent><Phase4Editor value={config.phase_4} onChange={phase_4=>setConfig(c=>({...c,phase_4}))} error={errs.phase_4}/></CardContent></Card><Alert severity="info">Synchronous ML request. Keep this page open while the stage runs.</Alert><Button type="submit" variant="contained" disabled={!canSubmit}>{mutation.isPending?`Running ${stageName}…`:`Run ${stageName}`}</Button></Stack></form>}
  {runId&&attemptId&&<Stack direction="row" useFlexGap flexWrap="wrap" spacing={1} sx={{mt:2}}><Button component={RouterLink} to={`/runs/${encodeURIComponent(runId)}`}>Run details</Button><Button component={RouterLink} to={`/runs/${encodeURIComponent(runId)}/attempts/${encodeURIComponent(attemptId)}`}>Attempt details</Button>{(already?.status==='completed'&&!result)&&<Button component={RouterLink} to={`/runs/${encodeURIComponent(runId)}/attempts/${encodeURIComponent(attemptId)}/reports/part_b`}>Part B report</Button>}</Stack>}
- {result&&<Card variant="outlined" sx={{mt:2}}><CardContent><Typography variant="h6">{stageName} execution result</Typography><Typography>Status: {result.status}; requested: {result.requested_stage}</Typography><Typography>Run ID: {result.run_id}</Typography><Typography>Attempt ID: {result.attempt_id}</Typography><Typography>{result.message}</Typography><Box component="pre" sx={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{JSON.stringify(result.summary,null,2)}</Box>{result.executions.map(x=><Typography key={x.execution_id}>{x.stage}: {x.status} · {x.execution_id}</Typography>)}{result.error&&<Alert severity="error">{result.error.error_code}: {safeWorkflowMessage(result.error.message)}</Alert>}</CardContent></Card>}
+ {result&&<Card variant="outlined" sx={{mt:2}}><CardContent><Typography variant="h6">{stageName} execution result</Typography><Typography>Status: {result.status}; requested: {result.requested_stage}</Typography><Typography>Run ID: {result.run_id}</Typography><Typography>Attempt ID: {result.attempt_id}</Typography><Typography>{safeWorkflowMessage(result.message)}</Typography><><KeyValueTable values={safeWorkflowValue(result.summary) as Record<string, unknown>}/><RawJsonDisclosure value={safeWorkflowValue(result.summary)}/></>{result.executions.map(x=><Typography key={x.execution_id}>{x.stage}: {x.status} · {x.execution_id}</Typography>)}{result.error&&<Alert severity="error">{result.error.error_code}: {safeWorkflowMessage(result.error.message)}</Alert>}</CardContent></Card>}
  </StageWorkspace></PageContainer>;
 }
-
-
-
-
-
-

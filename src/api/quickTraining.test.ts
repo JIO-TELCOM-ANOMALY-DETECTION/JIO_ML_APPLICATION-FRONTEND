@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { defaultEDAFormValues } from './edaApi';
 import { defaultCorrectedHistory, defaultFeatureSettings, newFeature } from './featureBuilder';
-import { buildQuickTrainingRequest, validateQuickDraft, type QuickDraft } from './quickTraining';
+import { acknowledgeQuickTraining, buildQuickTrainingRequest, validateQuickDraft, type QuickDraft } from './quickTraining';
 import { backendPreprocessingDefaults } from './stageBC';
 import { defaultParameters, defaultSearch, freshTrainingForm } from './training';
 import { safeWorkflowValue } from './workflowErrorDisplay';
@@ -34,4 +34,17 @@ describe('Quick Training pipeline payload', () => {
   it('sends the selected global IQR settings without centered or user bounds', () => { const value = draft(); value.preprocessing.outlier = { method: 'global_iqr', direction: 'both', iqr_multiplier: 2.25, centered_window_minutes: 1440, user_lower_bound: 10 }; const outlier = buildQuickTrainingRequest(value).preprocessing.outlier; expect(outlier).toEqual({ method: 'global_iqr', direction: 'both', iqr_multiplier: 2.25 }); });
   it('sends selected one-day centered IQR settings without user bounds', () => { const value = draft(); value.preprocessing.outlier = { method: 'one_day_centered_iqr', direction: 'upper_only', iqr_multiplier: 1.8, centered_window_minutes: 1440, centered_min_valid_minutes: 720, user_upper_bound: 90 }; const outlier = buildQuickTrainingRequest(value).preprocessing.outlier; expect(outlier).toEqual({ method: 'one_day_centered_iqr', direction: 'upper_only', iqr_multiplier: 1.8, centered_window_minutes: 1440, centered_min_valid_minutes: 720 }); });
   it('sends selected user bounds without IQR or centered settings', () => { const value = draft(); value.preprocessing.outlier = { method: 'user_bounds', direction: 'both', user_lower_bound: 10, user_upper_bound: 90, iqr_multiplier: 1.5, centered_window_minutes: 1440, centered_min_valid_minutes: 720 }; const outlier = buildQuickTrainingRequest(value).preprocessing.outlier; expect(outlier).toEqual({ method: 'user_bounds', direction: 'both', user_lower_bound: 10, user_upper_bound: 90 }); });
+});
+
+describe('Acknowledgement contract', () => {
+  it('accepts created with a run ID and null attempt ID independently of completed responses', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, headers: { get: () => 'application/json' }, json: async () => ({ run_id: 'run-ack', status: 'created', attempt_id: null, message: 'Accepted' }) }));
+    const { run_id: ignored, ...request } = buildQuickTrainingRequest(draft()); void ignored;
+    await expect(acknowledgeQuickTraining(request)).resolves.toEqual({ run_id: 'run-ack', status: 'created', attempt_id: null, message: 'Accepted' });
+  });
+  it.each([{ run_id: 'r', status: 'completed', attempt_id: 'a', message: 'Done' }, { run_id: '', status: 'created', attempt_id: null, message: 'Accepted' }, { run_id: 'r', status: 'created', message: 'Accepted' }])('rejects malformed acknowledgement %#', async body => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, headers: { get: () => 'application/json' }, json: async () => body }));
+    const { run_id: ignored, ...request } = buildQuickTrainingRequest(draft()); void ignored;
+    await expect(acknowledgeQuickTraining(request)).rejects.toThrow('Unexpected acknowledgement response.');
+  });
 });
